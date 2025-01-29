@@ -356,5 +356,4 @@ if 'k8s_step' not in st.session_state:
 st.markdown("---")
 st.markdown("🌟 DevOps Tools Suite - Making DevOps easier")
 
-# Just add this for checking the Git
 
