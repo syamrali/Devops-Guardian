@@ -3,6 +3,8 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import os
 import yaml
+import json
+import re
 
 # Load environment variables and configure Gemini
 load_dotenv()
@@ -36,9 +38,9 @@ def analyze_with_gemini(file_content):
 
 
 # Function to generate Kubernetes Deployment YAML from a Dockerfile
-def generate_deployment_yaml(image_name, dockerfile_config=None):
+def generate_deployment_yaml(image_name, dockerfile_config=None, gemini_suggestions=None):
     """
-    Generate a Kubernetes deployment file using Dockerfile analysis.
+    Generate a Kubernetes deployment file using Dockerfile analysis and Gemini suggestions.
     """
     if dockerfile_config is None:
         dockerfile_config = {}
@@ -64,7 +66,10 @@ def generate_deployment_yaml(image_name, dockerfile_config=None):
     if command:
         container_spec['command'] = command if isinstance(command, list) else [command]
     
-    # Convert container_spec to formatted string
+    # Add security recommendations from Gemini (if any)
+    if gemini_suggestions:
+        container_spec['securityContext'] = gemini_suggestions.get('securityContext', {})
+    
     container_spec_str = ''.join(f'        {k}: {v}\n' for k, v in container_spec.items())
     
     deployment_yaml = f"""
@@ -130,7 +135,7 @@ spec:
   - host: {host_name}
     http:
       paths:
-      - path: /
+      - path: / 
         pathType: Prefix
         backend:
           service:
@@ -144,7 +149,9 @@ spec:
 def analyze_dockerfile(file_content):
     model = genai.GenerativeModel('gemini-pro')
     prompt = f"""
-    Analyze the following Dockerfile and extract key configuration details in JSON format:
+    You’re a skilled DevOps engineer with extensive experience in containerization technologies, particularly Docker. You have a deep understanding of Dockerfiles and their configuration settings, and you can extract relevant information in a structured manner.
+
+Your task is to analyze the following Dockerfile and extract all configuration details in JSON format. Here is the Dockerfile content that you need to analyze:
     {file_content}
     
     Return a JSON object with these fields:
@@ -160,9 +167,6 @@ def analyze_dockerfile(file_content):
         # Store the raw analysis for display
         st.session_state.raw_analysis = response.text
         # Try to extract structured data from the response
-        import json
-        # Look for JSON-like content between triple backticks if present
-        import re
         json_match = re.search(r'```json\n(.*?)\n```', response.text, re.DOTALL)
         if json_match:
             return json.loads(json_match.group(1))
@@ -174,13 +178,21 @@ def analyze_dockerfile(file_content):
 
 
 def is_dockerfile(file_name, file_content):
-    """Validate if the uploaded file is a Dockerfile"""
-    if file_name.lower() == "dockerfile":
-        return True
-    # Check if the content looks like a Dockerfile
-    dockerfile_keywords = ["FROM", "RUN", "CMD", "ENTRYPOINT", "COPY", "ADD", "ENV", "WORKDIR", "EXPOSE"]
-    content_lines = file_content.upper().split('\n')
-    return any(line.strip().startswith(tuple(dockerfile_keywords)) for line in content_lines)
+    """
+    A simple check to verify if the uploaded file is a Dockerfile.
+    This checks the file name and a few initial lines of the file content.
+    """
+    # Check if the file name is 'Dockerfile'
+    if file_name.lower() != "dockerfile":
+        return False
+    
+    # Check if the content includes Dockerfile-specific instructions
+    dockerfile_keywords = ['FROM', 'RUN', 'CMD', 'ENTRYPOINT', 'EXPOSE', 'COPY', 'ADD']
+    for keyword in dockerfile_keywords:
+        if keyword in file_content:
+            return True
+    
+    return False
 
 
 # Main App
@@ -195,7 +207,7 @@ tool_option = st.sidebar.selectbox(
 if tool_option == "🔒 AI-DevOps Guardian":
     st.header("AI-DevOps Guardian")
     st.subheader("Secure your DevOps configurations with AI-powered analysis.")
-    st.write("""
+    st.write(""" 
     Upload your DevOps configuration files to scan for:
     - Misconfigurations
     - Security vulnerabilities
@@ -273,7 +285,6 @@ elif tool_option == "⚙️ Kubernetes YAML Generator":
         with st.expander("View Dockerfile Analysis", expanded=True):
             st.write(st.session_state.dockerfile_analysis)
         
-        
         st.write("#### ⚙️ Configure Kubernetes Settings")
         col1, col2 = st.columns(2)
         with col1:
@@ -306,43 +317,44 @@ elif tool_option == "⚙️ Kubernetes YAML Generator":
         dockerfile_config = st.session_state.get('dockerfile_analysis', {})
         
         # Generate YAML files using Dockerfile configuration
-        deployment_yaml = generate_deployment_yaml(image_name, dockerfile_config)
+        gemini_suggestions = dockerfile_config.get('security_recommendations', {})
+        
+        # Generate YAML files
+        deployment_yaml = generate_deployment_yaml(image_name, dockerfile_config, gemini_suggestions)
         service_yaml = generate_service_yaml(image_name, dockerfile_config)
         ingress_yaml = generate_ingress_yaml(image_name, host_name)
         
-        # Display files in expandable sections
-        with st.expander("📄 Deployment YAML", expanded=True):
-            st.code(deployment_yaml, language="yaml")
-            st.download_button(
-                "⬇️ Download Deployment YAML",
-                deployment_yaml,
-                file_name=f"{image_name}-deployment.yaml",
-                mime="text/yaml"
-            )
+        # Display YAML Files
+        st.subheader("Kubernetes Deployment YAML")
+        st.code(deployment_yaml, language="yaml")
         
-        with st.expander("📄 Service YAML", expanded=True):
-            st.code(service_yaml, language="yaml")
-            st.download_button(
-                "⬇️ Download Service YAML",
-                service_yaml,
-                file_name=f"{image_name}-service.yaml",
-                mime="text/yaml"
-            )
-            
-        with st.expander("📄 Ingress YAML", expanded=True):
-            st.code(ingress_yaml, language="yaml")
-            st.download_button(
-                "⬇️ Download Ingress YAML",
-                ingress_yaml,
-                file_name=f"{image_name}-ingress.yaml",
-                mime="text/yaml"
-            )    
-    
+        st.subheader("Kubernetes Service YAML")
+        st.code(service_yaml, language="yaml")
         
+        st.subheader("Kubernetes Ingress YAML")
+        st.code(ingress_yaml, language="yaml")
         
+        st.download_button(
+            "⬇️ Download Deployment YAML",
+            deployment_yaml,
+            file_name=f"{image_name}-deployment.yaml",
+            mime="text/yaml"
+        )
         
-     
-
+        st.download_button(
+            "⬇️ Download Service YAML",
+            service_yaml,
+            file_name=f"{image_name}-service.yaml",
+            mime="text/yaml"
+        )
+        
+        st.download_button(
+            "⬇️ Download Ingress YAML",
+            ingress_yaml,
+            file_name=f"{image_name}-ingress.yaml",
+            mime="text/yaml"
+        )
+        
         # Option to restart
         if st.button("🔄 Start Over"):
             st.session_state.k8s_step = 1
@@ -355,5 +367,3 @@ if 'k8s_step' not in st.session_state:
 # Footer
 st.markdown("---")
 st.markdown("🌟 DevOps Tools Suite - Making DevOps easier")
-
-
